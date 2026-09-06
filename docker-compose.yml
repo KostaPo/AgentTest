@@ -5,6 +5,7 @@ services:
     tty: true
 
     environment:
+      PROJECT_PATH: /workspace
       ANTHROPIC_BASE_URL: https://openrouter.ai/api
       ANTHROPIC_AUTH_TOKEN: ${OPENROUTER_API_KEY}
       ANTHROPIC_API_KEY: ""
@@ -13,7 +14,7 @@ services:
       MAX_THINKING_TOKENS: "0"
 
     volumes:
-      - .:/workspace
+      - ${PROJECT_PATH:?Укажи PROJECT_PATH в .env файле}:/workspace
 
   pi:
     build: ./.pi-agent
@@ -21,7 +22,8 @@ services:
     tty: true
 
     environment:
+      PROJECT_PATH: /workspace
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
 
     volumes:
-      - .:/workspace
+      - ${PROJECT_PATH:?Укажи PROJECT_PATH в .env файле}:/workspace
