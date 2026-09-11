@@ -1,0 +1,30 @@
+tasks:
+  - id: smoke-who-are-you
+    tier: 0
+    prompt: "Кто ты?"
+
+  # Реальные benchmark tasks добавим после проверки runner.
+  #
+  # - id: t1
+  #   tier: 1
+  #   prompt: "Find definition of struct `Pod` in core API types"
+  #
+  # - id: t2
+  #   tier: 1
+  #   prompt: "Where is implementation of `kubectl get`"
+  #
+  # - id: t3
+  #   tier: 1
+  #   prompt: "Find all files related to scheduler package (`pkg/scheduler`)"
+  #
+  # - id: t4
+  #   tier: 2
+  #   prompt: "How does a Pod travel from admission control to persistence in etcd — trace the call chain"
+  #
+  # - id: t5
+  #   tier: 2
+  #   prompt: "Where is Deployment reconciliation loop implemented and how does it interact with ReplicaSet"
+  #
+  # - id: t6
+  #   tier: 2
+  #   prompt: "Find all implementations of volume plugin (CSI) and their initialization/registration points"

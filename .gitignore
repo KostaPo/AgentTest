@@ -1,8 +1,42 @@
-# Секреты
-.env
-*.env
-!*.env.example
+# Go
+bin/
+*.exe
+*.exe~
+*.test
+*.out
 
-# IDE
+# Go workspace / IDE
+*.mod.local
+vendor/
+
+# JetBrains / GoLand
 .idea/
+*.iml
+
+# VS Code
 .vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Benchmark results
+results/
+
+# Temporary benchmark workspaces
+workspaces/
+tmp/
+
+# Logs
+*.log
+
+# Docker
+docker-compose.override.yml
+
+# Local files
+*.local

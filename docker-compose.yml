@@ -1,20 +1,20 @@
 services:
   claude:
-    build: .claude-agent
+    build: ./.claude-agent
     stdin_open: true
     tty: true
 
     environment:
-      PROJECT_PATH: /workspace
       ANTHROPIC_BASE_URL: https://openrouter.ai/api
       ANTHROPIC_AUTH_TOKEN: ${OPENROUTER_API_KEY}
       ANTHROPIC_API_KEY: ""
-      ANTHROPIC_MODEL: "deepseek/deepseek-v4-flash-0731"
-      CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: "1"
-      MAX_THINKING_TOKENS: "0"
 
-    volumes:
-      - ${PROJECT_PATH:?Укажи PROJECT_PATH в .env файле}:/workspace
+      ANTHROPIC_MODEL: "deepseek/deepseek-v4-flash-0731"
+
+      CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: "1"
+      CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1"
+
+      MAX_THINKING_TOKENS: "0"
 
   pi:
     build: ./.pi-agent
@@ -22,8 +22,4 @@ services:
     tty: true
 
     environment:
-      PROJECT_PATH: /workspace
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-
-    volumes:
-      - ${PROJECT_PATH:?Укажи PROJECT_PATH в .env файле}:/workspace
