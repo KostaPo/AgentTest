@@ -30,9 +30,16 @@ func (c *Claude) ParseEvent(event map[string]any) EventInfo {
 	eventType, _ := event["type"].(string)
 
 	switch eventType {
-	case "tool_use":
+	case "assistant":
+		// Assistant text can appear here too.
+		answer := extractAssistantText(event)
+
+		if answer == "" {
+			return EventInfo{}
+		}
+
 		return EventInfo{
-			IsToolCall: true,
+			Answer: answer,
 		}
 
 	case "result":
@@ -46,4 +53,37 @@ func (c *Claude) ParseEvent(event map[string]any) EventInfo {
 	default:
 		return EventInfo{}
 	}
+}
+
+func extractAssistantText(event map[string]any) string {
+	message, ok := event["message"].(map[string]any)
+	if !ok {
+		return ""
+	}
+
+	content, ok := message["content"].([]any)
+	if !ok {
+		return ""
+	}
+
+	for _, item := range content {
+		block, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		blockType, _ := block["type"].(string)
+
+		if blockType != "text" {
+			continue
+		}
+
+		text, _ := block["text"].(string)
+
+		if text != "" {
+			return text
+		}
+	}
+
+	return ""
 }

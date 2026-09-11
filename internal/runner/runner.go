@@ -48,6 +48,9 @@ type Result struct {
 	TimeToFirstToolMs *int64 `json:"time_to_first_tool_ms,omitempty"`
 	ToolCalls         int    `json:"tool_calls"`
 
+	// Final answer produced by the agent.
+	Answer string `json:"answer,omitempty"`
+
 	ExitCode  int  `json:"exit_code"`
 	ProcessOK bool `json:"process_ok"`
 
@@ -85,29 +88,56 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 	)
 
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
-		return Result{}, fmt.Errorf("create run directory: %w", err)
+		return Result{}, fmt.Errorf(
+			"create run directory: %w",
+			err,
+		)
 	}
 
-	stdoutPath := filepath.Join(runDir, "stdout.jsonl")
-	stderrPath := filepath.Join(runDir, "stderr.log")
-	eventsPath := filepath.Join(runDir, "events.jsonl")
-	resultPath := filepath.Join(runDir, "result.json")
+	stdoutPath := filepath.Join(
+		runDir,
+		"stdout.jsonl",
+	)
+
+	stderrPath := filepath.Join(
+		runDir,
+		"stderr.log",
+	)
+
+	eventsPath := filepath.Join(
+		runDir,
+		"events.jsonl",
+	)
+
+	resultPath := filepath.Join(
+		runDir,
+		"result.json",
+	)
 
 	stdoutFile, err := os.Create(stdoutPath)
 	if err != nil {
-		return Result{}, fmt.Errorf("create stdout file: %w", err)
+		return Result{}, fmt.Errorf(
+			"create stdout file: %w",
+			err,
+		)
 	}
 	defer stdoutFile.Close()
 
 	stderrFile, err := os.Create(stderrPath)
 	if err != nil {
-		return Result{}, fmt.Errorf("create stderr file: %w", err)
+		return Result{}, fmt.Errorf(
+			"create stderr file: %w",
+			err,
+		)
 	}
 	defer stderrFile.Close()
 
 	eventsFile, err := os.Create(eventsPath)
 	if err != nil {
-		return Result{}, fmt.Errorf("create events file: %w", err)
+		return Result{}, fmt.Errorf(
+			"create events file: %w",
+			err,
+		)
 	}
 	defer eventsFile.Close()
 
@@ -124,11 +154,6 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 		defer cancel()
 	}
 
-	// IMPORTANT:
-	// docker compose must be executed from the benchmark project's
-	// directory, not from the target repository.
-	//
-	// The target repository is mounted separately as /workspace.
 	args := []string{
 		"compose",
 		"-f",
@@ -157,22 +182,31 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 		args...,
 	)
 
-	// docker compose resolves relative paths, configuration and the
-	// .env file relative to this directory.
+	// Run docker-compose from the benchmark project,
+	// not from the target repository.
 	cmd.Dir = r.cfg.ComposeDir
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return Result{}, fmt.Errorf("stdout pipe: %w", err)
+		return Result{}, fmt.Errorf(
+			"stdout pipe: %w",
+			err,
+		)
 	}
 
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return Result{}, fmt.Errorf("stderr pipe: %w", err)
+		return Result{}, fmt.Errorf(
+			"stderr pipe: %w",
+			err,
+		)
 	}
 
 	if err := cmd.Start(); err != nil {
-		return Result{}, fmt.Errorf("start docker compose: %w", err)
+		return Result{}, fmt.Errorf(
+			"start docker compose: %w",
+			err,
+		)
 	}
 
 	encoder := json.NewEncoder(eventsFile)
@@ -180,18 +214,19 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 	var (
 		toolCalls   int
 		firstToolMs *int64
+		answer      string
 	)
 
 	stdoutDone := make(chan error, 1)
+	stderrDone := make(chan error, 1)
 
-	// Read stdout continuously so we can:
-	// 1. preserve raw output
-	// 2. parse JSONL events
-	// 3. calculate tool metrics
+	// ------------------------------------------------------------
+	// stdout
+	// ------------------------------------------------------------
+
 	go func() {
 		scanner := bufio.NewScanner(stdoutPipe)
 
-		// Agent output can contain very large JSON records.
 		scanner.Buffer(
 			make([]byte, 64*1024),
 			10*1024*1024,
@@ -208,8 +243,8 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 
 			var event map[string]any
 
-			// Some stderr/CLI noise can occasionally appear in output.
-			// If this line isn't JSON, just preserve it and continue.
+			// Preserve non-JSON output in stdout,
+			// but don't attempt to parse it as an event.
 			if err := json.Unmarshal(
 				[]byte(line),
 				&event,
@@ -228,7 +263,15 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 				}
 			}
 
-			// Normalized event record.
+			// Keep the latest non-empty answer.
+			//
+			// This is useful because:
+			// - Claude can emit a final "result"
+			// - Pi can emit message_end / turn_end
+			if strings.TrimSpace(info.Answer) != "" {
+				answer = info.Answer
+			}
+
 			normalized := map[string]any{
 				"t_ms":  time.Since(started).Milliseconds(),
 				"agent": req.Agent.Name(),
@@ -236,8 +279,8 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 			}
 
 			if err := encoder.Encode(normalized); err != nil {
-				// Do not kill the benchmark because an event could not
-				// be written. Raw stdout is already preserved.
+				// Raw stdout is already preserved, so don't fail
+				// the entire benchmark because normalized logging failed.
 				continue
 			}
 		}
@@ -245,7 +288,10 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 		stdoutDone <- scanner.Err()
 	}()
 
-	// Preserve stderr independently.
+	// ------------------------------------------------------------
+	// stderr
+	// ------------------------------------------------------------
+
 	go func() {
 		scanner := bufio.NewScanner(stderrPipe)
 
@@ -260,15 +306,30 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 				scanner.Text(),
 			)
 		}
+
+		stderrDone <- scanner.Err()
 	}()
+
+	// ------------------------------------------------------------
+	// Wait
+	// ------------------------------------------------------------
 
 	waitErr := cmd.Wait()
 
-	// Make sure stdout has been completely drained.
-	if err := <-stdoutDone; err != nil {
+	stdoutErr := <-stdoutDone
+	stderrErr := <-stderrDone
+
+	if stdoutErr != nil {
 		return Result{}, fmt.Errorf(
 			"read stdout: %w",
-			err,
+			stdoutErr,
+		)
+	}
+
+	if stderrErr != nil {
+		return Result{}, fmt.Errorf(
+			"read stderr: %w",
+			stderrErr,
 		)
 	}
 
@@ -286,10 +347,13 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 
 	processOK := exitCode == 0
 
-	// A timeout means the process did not complete normally.
 	if ctx.Err() != nil {
 		processOK = false
 	}
+
+	// ------------------------------------------------------------
+	// Result
+	// ------------------------------------------------------------
 
 	result := Result{
 		RunID:  req.RunID,
@@ -307,6 +371,8 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 		TimeToFirstToolMs: firstToolMs,
 		ToolCalls:         toolCalls,
 
+		Answer: answer,
+
 		ExitCode:  exitCode,
 		ProcessOK: processOK,
 
@@ -314,10 +380,12 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 			r.cfg.ResultsDir,
 			stdoutPath,
 		),
+
 		StderrFile: relativePath(
 			r.cfg.ResultsDir,
 			stderrPath,
 		),
+
 		EventsFile: relativePath(
 			r.cfg.ResultsDir,
 			eventsPath,

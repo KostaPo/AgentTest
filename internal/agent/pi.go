@@ -1,7 +1,5 @@
 package agent
 
-import "fmt"
-
 type Pi struct {
 	Provider string
 	Model    string
@@ -39,16 +37,10 @@ func (p *Pi) ParseEvent(event map[string]any) EventInfo {
 
 	switch eventType {
 	case "tool_execution_start":
-		toolName := ""
-
-		if tool, ok := event["toolName"].(string); ok {
-			toolName = tool
-		}
+		toolName, _ := event["toolName"].(string)
 
 		if toolName == "" {
-			if tool, ok := event["tool"].(string); ok {
-				toolName = tool
-			}
+			toolName, _ = event["tool"].(string)
 		}
 
 		return EventInfo{
@@ -56,9 +48,28 @@ func (p *Pi) ParseEvent(event map[string]any) EventInfo {
 			ToolName:   toolName,
 		}
 
-	case "agent_end":
+	case "message_end":
+		answer := extractTextFromMessage(event["message"])
+
+		if answer == "" {
+			return EventInfo{}
+		}
+
 		return EventInfo{
 			IsFinal: true,
+			Answer:  answer,
+		}
+
+	case "turn_end":
+		answer := extractTextFromMessage(event["message"])
+
+		if answer == "" {
+			return EventInfo{}
+		}
+
+		return EventInfo{
+			IsFinal: true,
+			Answer:  answer,
 		}
 
 	default:
@@ -66,11 +77,35 @@ func (p *Pi) ParseEvent(event map[string]any) EventInfo {
 	}
 }
 
-func (p *Pi) String() string {
-	return fmt.Sprintf(
-		"Pi(provider=%s, model=%s, thinking=%s)",
-		p.Provider,
-		p.Model,
-		p.Thinking,
-	)
+func extractTextFromMessage(raw any) string {
+	message, ok := raw.(map[string]any)
+	if !ok {
+		return ""
+	}
+
+	content, ok := message["content"].([]any)
+	if !ok {
+		return ""
+	}
+
+	for _, item := range content {
+		block, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		blockType, _ := block["type"].(string)
+
+		if blockType != "text" {
+			continue
+		}
+
+		text, _ := block["text"].(string)
+
+		if text != "" {
+			return text
+		}
+	}
+
+	return ""
 }
