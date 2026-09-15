@@ -1,5 +1,7 @@
 package agent
 
+const maxThinkingTokens = "32000"
+
 type Claude struct {
 	Model string
 }
@@ -26,20 +28,27 @@ func (c *Claude) Args(task string) []string {
 	}
 }
 
-func (c *Claude) ParseEvent(event map[string]any) EventInfo {
+func (c *Claude) Env(reasoning string) []string {
+	if reasoning == "on" {
+		return []string{
+			"MAX_THINKING_TOKENS=" + maxThinkingTokens,
+		}
+	}
+
+	return []string{
+		"MAX_THINKING_TOKENS=0",
+	}
+}
+
+func (c *Claude) ParseEvent(
+	event map[string]any,
+) EventInfo {
 	eventType, _ := event["type"].(string)
 
 	switch eventType {
 	case "assistant":
-		// Assistant text can appear here too.
-		answer := extractAssistantText(event)
-
-		if answer == "" {
-			return EventInfo{}
-		}
-
 		return EventInfo{
-			Answer: answer,
+			Answer: extractAssistantText(event),
 		}
 
 	case "result":
@@ -48,6 +57,12 @@ func (c *Claude) ParseEvent(event map[string]any) EventInfo {
 		return EventInfo{
 			IsFinal: true,
 			Answer:  answer,
+			Usage:   extractClaudeUsage(event),
+		}
+
+	case "tool_use":
+		return EventInfo{
+			IsToolCall: true,
 		}
 
 	default:
@@ -55,7 +70,9 @@ func (c *Claude) ParseEvent(event map[string]any) EventInfo {
 	}
 }
 
-func extractAssistantText(event map[string]any) string {
+func extractAssistantText(
+	event map[string]any,
+) string {
 	message, ok := event["message"].(map[string]any)
 	if !ok {
 		return ""
@@ -66,6 +83,8 @@ func extractAssistantText(event map[string]any) string {
 		return ""
 	}
 
+	var result string
+
 	for _, item := range content {
 		block, ok := item.(map[string]any)
 		if !ok {
@@ -73,17 +92,51 @@ func extractAssistantText(event map[string]any) string {
 		}
 
 		blockType, _ := block["type"].(string)
-
 		if blockType != "text" {
 			continue
 		}
 
 		text, _ := block["text"].(string)
+		if text == "" {
+			continue
+		}
 
-		if text != "" {
-			return text
+		result += text
+	}
+
+	return result
+}
+
+func extractClaudeUsage(
+	event map[string]any,
+) *Usage {
+	usageRaw, ok := event["usage"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	usage := &Usage{}
+
+	if value, ok := numberAsInt64(
+		usageRaw["input_tokens"],
+	); ok {
+		usage.InputTokens = value
+	}
+
+	if value, ok := numberAsInt64(
+		usageRaw["output_tokens"],
+	); ok {
+		usage.OutputTokens = value
+	}
+
+	if details, ok :=
+		usageRaw["output_tokens_details"].(map[string]any); ok {
+		if value, ok := numberAsInt64(
+			details["thinking_tokens"],
+		); ok {
+			usage.ReasoningTokens = value
 		}
 	}
 
-	return ""
+	return usage
 }

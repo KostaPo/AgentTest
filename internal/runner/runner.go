@@ -2,7 +2,6 @@ package runner
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,20 +14,10 @@ import (
 )
 
 type Config struct {
-	// Directory containing compose.yaml.
-	ComposeDir string
-
-	// Absolute path to compose.yaml.
+	ComposeDir  string
 	ComposeFile string
-
-	// Target repository that will be mounted into /workspace.
 	ProjectPath string
-
-	// Where benchmark results are written.
-	ResultsDir string
-
-	// Maximum allowed runtime for one agent invocation.
-	Timeout time.Duration
+	ResultsDir  string
 }
 
 type Result struct {
@@ -46,9 +35,13 @@ type Result struct {
 
 	WallTimeMs        int64  `json:"wall_time_ms"`
 	TimeToFirstToolMs *int64 `json:"time_to_first_tool_ms,omitempty"`
+	TimeToAnswerMs    *int64 `json:"time_to_answer_ms,omitempty"`
 	ToolCalls         int    `json:"tool_calls"`
 
-	// Final answer produced by the agent.
+	InputTokens     int64 `json:"input_tokens"`
+	OutputTokens    int64 `json:"output_tokens"`
+	ReasoningTokens int64 `json:"reasoning_tokens"`
+
 	Answer string `json:"answer,omitempty"`
 
 	ExitCode  int  `json:"exit_code"`
@@ -67,6 +60,8 @@ type RunRequest struct {
 
 	Agent agent.Agent
 	Model string
+
+	Reasoning string
 }
 
 type Runner struct {
@@ -79,7 +74,9 @@ func New(cfg Config) *Runner {
 	}
 }
 
-func (r *Runner) Run(req RunRequest) (Result, error) {
+func (r *Runner) Run(
+	req RunRequest,
+) (Result, error) {
 	started := time.Now()
 
 	runDir := filepath.Join(
@@ -87,7 +84,10 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 		req.RunID,
 	)
 
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
+	if err := os.MkdirAll(
+		runDir,
+		0o755,
+	); err != nil {
 		return Result{}, fmt.Errorf(
 			"create run directory: %w",
 			err,
@@ -114,7 +114,9 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 		"result.json",
 	)
 
-	stdoutFile, err := os.Create(stdoutPath)
+	stdoutFile, err := os.Create(
+		stdoutPath,
+	)
 	if err != nil {
 		return Result{}, fmt.Errorf(
 			"create stdout file: %w",
@@ -123,7 +125,9 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 	}
 	defer stdoutFile.Close()
 
-	stderrFile, err := os.Create(stderrPath)
+	stderrFile, err := os.Create(
+		stderrPath,
+	)
 	if err != nil {
 		return Result{}, fmt.Errorf(
 			"create stderr file: %w",
@@ -132,7 +136,9 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 	}
 	defer stderrFile.Close()
 
-	eventsFile, err := os.Create(eventsPath)
+	eventsFile, err := os.Create(
+		eventsPath,
+	)
 	if err != nil {
 		return Result{}, fmt.Errorf(
 			"create events file: %w",
@@ -141,49 +147,46 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 	}
 	defer eventsFile.Close()
 
-	ctx := context.Background()
-
-	if r.cfg.Timeout > 0 {
-		var cancel context.CancelFunc
-
-		ctx, cancel = context.WithTimeout(
-			ctx,
-			r.cfg.Timeout,
-		)
-
-		defer cancel()
-	}
-
 	args := []string{
 		"compose",
 		"-f",
 		r.cfg.ComposeFile,
-
 		"run",
 		"--rm",
+	}
 
+	agentEnv := req.Agent.Env(
+		req.Reasoning,
+	)
+
+	for _, env := range agentEnv {
+		args = append(
+			args,
+			"-e",
+			env,
+		)
+	}
+
+	args = append(
+		args,
 		"-v",
 		fmt.Sprintf(
 			"%s:/workspace",
 			r.cfg.ProjectPath,
 		),
-
 		req.Agent.Service(),
-	}
+	)
 
 	args = append(
 		args,
 		req.Agent.Args(req.Prompt)...,
 	)
 
-	cmd := exec.CommandContext(
-		ctx,
+	cmd := exec.Command(
 		"docker",
 		args...,
 	)
 
-	// Run docker-compose from the benchmark project,
-	// not from the target repository.
 	cmd.Dir = r.cfg.ComposeDir
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -209,23 +212,28 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 		)
 	}
 
-	encoder := json.NewEncoder(eventsFile)
+	encoder := json.NewEncoder(
+		eventsFile,
+	)
 
 	var (
 		toolCalls   int
 		firstToolMs *int64
+		answerMs    *int64
 		answer      string
+
+		inputTokens     int64
+		outputTokens    int64
+		reasoningTokens int64
 	)
 
 	stdoutDone := make(chan error, 1)
 	stderrDone := make(chan error, 1)
 
-	// ------------------------------------------------------------
-	// stdout
-	// ------------------------------------------------------------
-
 	go func() {
-		scanner := bufio.NewScanner(stdoutPipe)
+		scanner := bufio.NewScanner(
+			stdoutPipe,
+		)
 
 		scanner.Buffer(
 			make([]byte, 64*1024),
@@ -235,7 +243,6 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 		for scanner.Scan() {
 			line := scanner.Text()
 
-			// Always preserve raw stdout.
 			_, _ = fmt.Fprintln(
 				stdoutFile,
 				line,
@@ -243,8 +250,6 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 
 			var event map[string]any
 
-			// Preserve non-JSON output in stdout,
-			// but don't attempt to parse it as an event.
 			if err := json.Unmarshal(
 				[]byte(line),
 				&event,
@@ -252,24 +257,46 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 				continue
 			}
 
-			info := req.Agent.ParseEvent(event)
+			info := req.Agent.ParseEvent(
+				event,
+			)
 
 			if info.IsToolCall {
 				toolCalls++
 
 				if firstToolMs == nil {
-					elapsed := time.Since(started).Milliseconds()
+					elapsed := time.Since(
+						started,
+					).Milliseconds()
+
 					firstToolMs = &elapsed
 				}
 			}
 
-			// Keep the latest non-empty answer.
-			//
-			// This is useful because:
-			// - Claude can emit a final "result"
-			// - Pi can emit message_end / turn_end
-			if strings.TrimSpace(info.Answer) != "" {
+			if strings.TrimSpace(
+				info.Answer,
+			) != "" {
 				answer = info.Answer
+
+				if info.IsFinal &&
+					answerMs == nil {
+					elapsed := time.Since(
+						started,
+					).Milliseconds()
+
+					answerMs = &elapsed
+				}
+			}
+
+			if info.Usage != nil {
+				inputTokens =
+					info.Usage.InputTokens
+
+				outputTokens =
+					info.Usage.OutputTokens
+
+				reasoningTokens =
+					info.Usage.ReasoningTokens
 			}
 
 			normalized := map[string]any{
@@ -278,9 +305,9 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 				"event": event,
 			}
 
-			if err := encoder.Encode(normalized); err != nil {
-				// Raw stdout is already preserved, so don't fail
-				// the entire benchmark because normalized logging failed.
+			if err := encoder.Encode(
+				normalized,
+			); err != nil {
 				continue
 			}
 		}
@@ -288,12 +315,10 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 		stdoutDone <- scanner.Err()
 	}()
 
-	// ------------------------------------------------------------
-	// stderr
-	// ------------------------------------------------------------
-
 	go func() {
-		scanner := bufio.NewScanner(stderrPipe)
+		scanner := bufio.NewScanner(
+			stderrPipe,
+		)
 
 		scanner.Buffer(
 			make([]byte, 64*1024),
@@ -309,10 +334,6 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 
 		stderrDone <- scanner.Err()
 	}()
-
-	// ------------------------------------------------------------
-	// Wait
-	// ------------------------------------------------------------
 
 	waitErr := cmd.Wait()
 
@@ -338,22 +359,13 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 	exitCode := 0
 
 	if waitErr != nil {
-		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+		if exitErr, ok :=
+			waitErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
 			exitCode = -1
 		}
 	}
-
-	processOK := exitCode == 0
-
-	if ctx.Err() != nil {
-		processOK = false
-	}
-
-	// ------------------------------------------------------------
-	// Result
-	// ------------------------------------------------------------
 
 	result := Result{
 		RunID:  req.RunID,
@@ -364,17 +376,27 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 
 		Model: req.Model,
 
-		StartedAt:  started.UTC().Format(time.RFC3339Nano),
-		FinishedAt: finished.UTC().Format(time.RFC3339Nano),
+		StartedAt: started.UTC().Format(
+			time.RFC3339Nano,
+		),
+
+		FinishedAt: finished.UTC().Format(
+			time.RFC3339Nano,
+		),
 
 		WallTimeMs:        finished.Sub(started).Milliseconds(),
 		TimeToFirstToolMs: firstToolMs,
+		TimeToAnswerMs:    answerMs,
 		ToolCalls:         toolCalls,
+
+		InputTokens:     inputTokens,
+		OutputTokens:    outputTokens,
+		ReasoningTokens: reasoningTokens,
 
 		Answer: answer,
 
 		ExitCode:  exitCode,
-		ProcessOK: processOK,
+		ProcessOK: exitCode == 0,
 
 		StdoutFile: relativePath(
 			r.cfg.ResultsDir,
@@ -418,12 +440,14 @@ func (r *Runner) Run(req RunRequest) (Result, error) {
 	return result, nil
 }
 
-func relativePath(base, path string) string {
+func relativePath(
+	base string,
+	path string,
+) string {
 	rel, err := filepath.Rel(
 		base,
 		path,
 	)
-
 	if err != nil {
 		return strings.TrimPrefix(
 			path,

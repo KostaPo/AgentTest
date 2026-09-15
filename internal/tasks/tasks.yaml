@@ -1,0 +1,7 @@
+tasks:
+  - id: smoke-1
+    tier: 0
+    prompt: "Кто ты?"
+  - id: smoke-2
+    tier: 1
+    prompt: "Какую ЛЛМ используешь под капотом?"

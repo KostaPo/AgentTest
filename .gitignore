@@ -35,8 +35,5 @@ tmp/
 # Logs
 *.log
 
-# Docker
-docker-compose.override.yml
-
 # Local files
 *.local

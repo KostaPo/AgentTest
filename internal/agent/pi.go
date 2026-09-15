@@ -6,11 +6,20 @@ type Pi struct {
 	Thinking string
 }
 
-func NewPi(model string) *Pi {
+func NewPi(
+	model string,
+	reasoning string,
+) *Pi {
+	thinking := "off"
+
+	if reasoning == "on" {
+		thinking = "max"
+	}
+
 	return &Pi{
 		Provider: "openrouter",
 		Model:    model,
-		Thinking: "off",
+		Thinking: thinking,
 	}
 }
 
@@ -32,6 +41,10 @@ func (p *Pi) Args(task string) []string {
 	}
 }
 
+func (p *Pi) Env(reasoning string) []string {
+	return nil
+}
+
 func (p *Pi) ParseEvent(event map[string]any) EventInfo {
 	eventType, _ := event["type"].(string)
 
@@ -49,27 +62,26 @@ func (p *Pi) ParseEvent(event map[string]any) EventInfo {
 		}
 
 	case "message_end":
-		answer := extractTextFromMessage(event["message"])
-
-		if answer == "" {
+		message, ok := event["message"].(map[string]any)
+		if !ok {
 			return EventInfo{}
 		}
 
 		return EventInfo{
 			IsFinal: true,
-			Answer:  answer,
+			Answer:  extractTextFromMessage(message),
+			Usage:   extractPiUsage(message),
 		}
 
 	case "turn_end":
-		answer := extractTextFromMessage(event["message"])
-
-		if answer == "" {
+		message, ok := event["message"].(map[string]any)
+		if !ok {
 			return EventInfo{}
 		}
 
 		return EventInfo{
 			IsFinal: true,
-			Answer:  answer,
+			Answer:  extractTextFromMessage(message),
 		}
 
 	default:
@@ -77,16 +89,15 @@ func (p *Pi) ParseEvent(event map[string]any) EventInfo {
 	}
 }
 
-func extractTextFromMessage(raw any) string {
-	message, ok := raw.(map[string]any)
-	if !ok {
-		return ""
-	}
-
+func extractTextFromMessage(
+	message map[string]any,
+) string {
 	content, ok := message["content"].([]any)
 	if !ok {
 		return ""
 	}
+
+	var result string
 
 	for _, item := range content {
 		block, ok := item.(map[string]any)
@@ -95,17 +106,105 @@ func extractTextFromMessage(raw any) string {
 		}
 
 		blockType, _ := block["type"].(string)
-
 		if blockType != "text" {
 			continue
 		}
 
 		text, _ := block["text"].(string)
-
-		if text != "" {
-			return text
+		if text == "" {
+			continue
 		}
+
+		result += text
 	}
 
-	return ""
+	return result
+}
+
+func extractPiUsage(
+	message map[string]any,
+) *Usage {
+	rawUsage, ok := message["usage"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	usage := &Usage{}
+
+	if value, ok := numberAsInt64(
+		rawUsage["input"],
+	); ok {
+		usage.InputTokens = value
+	}
+
+	if value, ok := numberAsInt64(
+		rawUsage["output"],
+	); ok {
+		usage.OutputTokens = value
+	}
+
+	if value, ok := numberAsInt64(
+		rawUsage["reasoning"],
+	); ok {
+		usage.ReasoningTokens = value
+	}
+
+	if value, ok := numberAsInt64(
+		rawUsage["cacheRead"],
+	); ok {
+		usage.CacheReadTokens = value
+	}
+
+	if value, ok := numberAsInt64(
+		rawUsage["cacheWrite"],
+	); ok {
+		usage.CacheCreationTokens = value
+	}
+
+	return usage
+}
+
+func numberAsInt64(
+	value any,
+) (int64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return int64(v), true
+
+	case float32:
+		return int64(v), true
+
+	case int:
+		return int64(v), true
+
+	case int8:
+		return int64(v), true
+
+	case int16:
+		return int64(v), true
+
+	case int32:
+		return int64(v), true
+
+	case int64:
+		return v, true
+
+	case uint:
+		return int64(v), true
+
+	case uint8:
+		return int64(v), true
+
+	case uint16:
+		return int64(v), true
+
+	case uint32:
+		return int64(v), true
+
+	case uint64:
+		return int64(v), true
+
+	default:
+		return 0, false
+	}
 }

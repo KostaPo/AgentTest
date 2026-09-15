@@ -1,157 +1,186 @@
 package config
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"time"
 
-	"github.com/joho/godotenv"
+	"gopkg.in/yaml.v3"
 )
 
-// Compose-файл по конвенции лежит в директории бенчмарка рядом с .env
-// и называется "docker-compose.yml". Переопределяется через
-// -compose-file / COMPOSE_FILE, если файл когда-нибудь переименуют.
-const defaultComposeFileName = "docker-compose.yml"
+const ConfigFile = "config.yml"
 
-// Config — полностью разрешённая конфигурация запуска. Все пути здесь
-// уже абсолютные, дальше по коду никто не должен вызывать filepath.Abs
-// или думать про working directory.
 type Config struct {
-	BenchmarkDir string // директория с docker-compose.yml, .env, cmd/, internal/
-	ComposeFile  string // абсолютный путь к compose-файлу
+	Benchmark BenchmarkConfig `yaml:"benchmark"`
 
-	TaskFile string
-	Agent    string // "pi", "claude" или "both"
-	Runs     int
-	Model    string
-	Timeout  time.Duration
-
-	ProjectPath string // абсолютный путь к целевому репозиторию (монтируется как /workspace)
-	ResultsDir  string
+	// CLI-only.
+	Agent string `yaml:"-"`
 }
 
-// Load разрешает конфигурацию в порядке возрастания приоритета:
-// 1. дефолты в коде
-// 2. .env в директории бенчмарка
-// 3. реальные переменные окружения процесса
-// 4. флаги командной строки
+type BenchmarkConfig struct {
+	ProjectPath string `yaml:"project_path"`
+	Model       string `yaml:"model"`
+	ResultsDir  string `yaml:"results_dir"`
+	TaskFile    string `yaml:"task_file"`
+	Runs        int    `yaml:"runs"`
+	Reasoning   string `yaml:"reasoning"`
+}
+
 func Load() (Config, error) {
 	benchmarkDir, err := os.Getwd()
 	if err != nil {
-		return Config{}, fmt.Errorf("get benchmark directory: %w", err)
+		return Config{}, fmt.Errorf(
+			"get working directory: %w",
+			err,
+		)
 	}
 
 	benchmarkDir, err = filepath.Abs(benchmarkDir)
 	if err != nil {
-		return Config{}, fmt.Errorf("resolve benchmark directory: %w", err)
-	}
-
-	envPath := filepath.Join(benchmarkDir, ".env")
-	if err := godotenv.Load(envPath); err != nil {
-		fmt.Printf("warning: could not load %s: %v\n", envPath, err)
-	}
-
-	taskFile := flag.String("task-file", getenv("TASK_FILE", "tasks.yaml"), "path to tasks yaml (env: TASK_FILE)")
-	agentName := flag.String("agent", getenv("AGENT", "both"), "pi, claude or both (env: AGENT)")
-	runs := flag.Int("runs", getenvInt("RUNS", 1), "number of runs per task (env: RUNS)")
-	projectPath := flag.String("project", getenv("PROJECT_PATH", ""), "absolute or relative path to target repository (env: PROJECT_PATH)")
-	model := flag.String("model", getenv("MODEL", "deepseek/deepseek-v4-flash-0731"), "model name (env: MODEL)")
-	timeout := flag.Duration("timeout", getenvDuration("TIMEOUT", 15*time.Minute), "maximum runtime for one agent invocation (env: TIMEOUT)")
-	resultsDir := flag.String("results", getenv("RESULTS_DIR", "results"), "directory for benchmark results (env: RESULTS_DIR)")
-	composeFileName := flag.String("compose-file", getenv("COMPOSE_FILE", defaultComposeFileName), "compose file name inside the benchmark directory (env: COMPOSE_FILE)")
-
-	flag.Parse()
-
-	targetPath := *projectPath
-	if targetPath == "" {
-		return Config{}, fmt.Errorf("PROJECT_PATH must be set (env or -project flag)")
-	}
-
-	targetPath, err = filepath.Abs(targetPath)
-	if err != nil {
-		return Config{}, fmt.Errorf("resolve project path: %w", err)
-	}
-
-	info, err := os.Stat(targetPath)
-	if err != nil {
-		return Config{}, fmt.Errorf("project path: %w", err)
-	}
-	if !info.IsDir() {
-		return Config{}, fmt.Errorf("project path is not a directory: %s", targetPath)
-	}
-
-	resultsPath := *resultsDir
-	if !filepath.IsAbs(resultsPath) {
-		resultsPath = filepath.Join(benchmarkDir, resultsPath)
-	}
-	resultsPath, err = filepath.Abs(resultsPath)
-	if err != nil {
-		return Config{}, fmt.Errorf("resolve results directory: %w", err)
-	}
-
-	composeFile := filepath.Join(benchmarkDir, *composeFileName)
-	if _, err := os.Stat(composeFile); err != nil {
 		return Config{}, fmt.Errorf(
-			"compose file: %w (expected %q in the benchmark directory - override with -compose-file or COMPOSE_FILE)",
-			err, *composeFileName,
+			"resolve working directory: %w",
+			err,
 		)
 	}
 
-	return Config{
-		BenchmarkDir: benchmarkDir,
-		ComposeFile:  composeFile,
+	configPath := filepath.Join(
+		benchmarkDir,
+		ConfigFile,
+	)
 
-		TaskFile: *taskFile,
-		Agent:    *agentName,
-		Runs:     *runs,
-		Model:    *model,
-		Timeout:  *timeout,
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return Config{}, fmt.Errorf(
+			"read %s: %w",
+			configPath,
+			err,
+		)
+	}
 
-		ProjectPath: targetPath,
-		ResultsDir:  resultsPath,
-	}, nil
+	var cfg Config
+
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return Config{}, fmt.Errorf(
+			"parse %s: %w",
+			configPath,
+			err,
+		)
+	}
+
+	if err := validate(cfg); err != nil {
+		return Config{}, err
+	}
+
+	cfg.Benchmark.ProjectPath, err =
+		filepath.Abs(
+			cfg.Benchmark.ProjectPath,
+		)
+	if err != nil {
+		return Config{}, fmt.Errorf(
+			"resolve project_path: %w",
+			err,
+		)
+	}
+
+	if !filepath.IsAbs(
+		cfg.Benchmark.ResultsDir,
+	) {
+		cfg.Benchmark.ResultsDir =
+			filepath.Join(
+				benchmarkDir,
+				cfg.Benchmark.ResultsDir,
+			)
+	}
+
+	cfg.Benchmark.ResultsDir, err =
+		filepath.Abs(
+			cfg.Benchmark.ResultsDir,
+		)
+	if err != nil {
+		return Config{}, fmt.Errorf(
+			"resolve results_dir: %w",
+			err,
+		)
+	}
+
+	return cfg, nil
 }
 
-// Print выводит резолвнутую конфигурацию — то, что раньше печаталось
-// прямо из main.go.
+func validate(cfg Config) error {
+	b := cfg.Benchmark
+
+	if b.ProjectPath == "" {
+		return fmt.Errorf(
+			"benchmark.project_path must not be empty",
+		)
+	}
+
+	if b.Model == "" {
+		return fmt.Errorf(
+			"benchmark.model must not be empty",
+		)
+	}
+
+	if b.ResultsDir == "" {
+		return fmt.Errorf(
+			"benchmark.results_dir must not be empty",
+		)
+	}
+
+	if b.TaskFile == "" {
+		return fmt.Errorf(
+			"benchmark.task_file must not be empty",
+		)
+	}
+
+	if b.Runs <= 0 {
+		return fmt.Errorf(
+			"benchmark.runs must be greater than 0",
+		)
+	}
+
+	if b.Reasoning != "on" && b.Reasoning != "off" {
+		return fmt.Errorf(
+			"benchmark.reasoning must be \"on\" or \"off\"",
+		)
+	}
+
+	return nil
+}
+
 func (c Config) Print() {
-	fmt.Printf("Benchmark directory: %s\n", c.BenchmarkDir)
-	fmt.Printf("Compose file:        %s\n", c.ComposeFile)
-	fmt.Printf("Target project:      %s\n", c.ProjectPath)
-	fmt.Printf("Results directory:   %s\n", c.ResultsDir)
-	fmt.Printf("Model:               %s\n", c.Model)
-}
+	fmt.Printf(
+		"Project path:  %s\n",
+		c.Benchmark.ProjectPath,
+	)
 
-func getenv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
+	fmt.Printf(
+		"Model:         %s\n",
+		c.Benchmark.Model,
+	)
 
-func getenvInt(key string, fallback int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return fallback
-	}
-	return n
-}
+	fmt.Printf(
+		"Results dir:   %s\n",
+		c.Benchmark.ResultsDir,
+	)
 
-func getenvDuration(key string, fallback time.Duration) time.Duration {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return fallback
-	}
-	return d
+	fmt.Printf(
+		"Task file:     %s\n",
+		c.Benchmark.TaskFile,
+	)
+
+	fmt.Printf(
+		"Runs:          %d\n",
+		c.Benchmark.Runs,
+	)
+
+	fmt.Printf(
+		"Reasoning:     %s\n",
+		c.Benchmark.Reasoning,
+	)
+
+	fmt.Printf(
+		"Agent:         %s\n",
+		c.Agent,
+	)
 }
