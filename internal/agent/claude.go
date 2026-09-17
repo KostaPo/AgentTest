@@ -129,6 +129,18 @@ func extractClaudeUsage(
 		usage.OutputTokens = value
 	}
 
+	if value, ok := numberAsInt64(
+		usageRaw["cache_read_input_tokens"],
+	); ok {
+		usage.CacheReadTokens = value
+	}
+
+	if value, ok := numberAsInt64(
+		usageRaw["cache_creation_input_tokens"],
+	); ok {
+		usage.CacheCreationTokens = value
+	}
+
 	if details, ok :=
 		usageRaw["output_tokens_details"].(map[string]any); ok {
 		if value, ok := numberAsInt64(
@@ -139,4 +151,49 @@ func extractClaudeUsage(
 	}
 
 	return usage
+}
+
+func numberAsInt64(
+	value any,
+) (int64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return int64(v), true
+
+	case float32:
+		return int64(v), true
+
+	case int:
+		return int64(v), true
+
+	case int8:
+		return int64(v), true
+
+	case int16:
+		return int64(v), true
+
+	case int32:
+		return int64(v), true
+
+	case int64:
+		return v, true
+
+	case uint:
+		return int64(v), true
+
+	case uint8:
+		return int64(v), true
+
+	case uint16:
+		return int64(v), true
+
+	case uint32:
+		return int64(v), true
+
+	case uint64:
+		return int64(v), true
+
+	default:
+		return 0, false
+	}
 }

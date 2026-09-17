@@ -38,9 +38,11 @@ type Result struct {
 	TimeToAnswerMs    *int64 `json:"time_to_answer_ms,omitempty"`
 	ToolCalls         int    `json:"tool_calls"`
 
-	InputTokens     int64 `json:"input_tokens"`
-	OutputTokens    int64 `json:"output_tokens"`
-	ReasoningTokens int64 `json:"reasoning_tokens"`
+	InputTokens         int64 `json:"input_tokens"`
+	OutputTokens        int64 `json:"output_tokens"`
+	ReasoningTokens     int64 `json:"reasoning_tokens"`
+	CacheReadTokens     int64 `json:"cache_read_tokens"`
+	CacheCreationTokens int64 `json:"cache_creation_tokens"`
 
 	Answer string `json:"answer,omitempty"`
 
@@ -155,11 +157,9 @@ func (r *Runner) Run(
 		"--rm",
 	}
 
-	agentEnv := req.Agent.Env(
+	for _, env := range req.Agent.Env(
 		req.Reasoning,
-	)
-
-	for _, env := range agentEnv {
+	) {
 		args = append(
 			args,
 			"-e",
@@ -222,9 +222,11 @@ func (r *Runner) Run(
 		answerMs    *int64
 		answer      string
 
-		inputTokens     int64
-		outputTokens    int64
-		reasoningTokens int64
+		inputTokens         int64
+		outputTokens        int64
+		reasoningTokens     int64
+		cacheReadTokens     int64
+		cacheCreationTokens int64
 	)
 
 	stdoutDone := make(chan error, 1)
@@ -277,15 +279,15 @@ func (r *Runner) Run(
 				info.Answer,
 			) != "" {
 				answer = info.Answer
+			}
 
-				if info.IsFinal &&
-					answerMs == nil {
-					elapsed := time.Since(
-						started,
-					).Milliseconds()
+			if info.IsFinal &&
+				answerMs == nil {
+				elapsed := time.Since(
+					started,
+				).Milliseconds()
 
-					answerMs = &elapsed
-				}
+				answerMs = &elapsed
 			}
 
 			if info.Usage != nil {
@@ -297,6 +299,12 @@ func (r *Runner) Run(
 
 				reasoningTokens =
 					info.Usage.ReasoningTokens
+
+				cacheReadTokens =
+					info.Usage.CacheReadTokens
+
+				cacheCreationTokens =
+					info.Usage.CacheCreationTokens
 			}
 
 			normalized := map[string]any{
@@ -389,9 +397,11 @@ func (r *Runner) Run(
 		TimeToAnswerMs:    answerMs,
 		ToolCalls:         toolCalls,
 
-		InputTokens:     inputTokens,
-		OutputTokens:    outputTokens,
-		ReasoningTokens: reasoningTokens,
+		InputTokens:         inputTokens,
+		OutputTokens:        outputTokens,
+		ReasoningTokens:     reasoningTokens,
+		CacheReadTokens:     cacheReadTokens,
+		CacheCreationTokens: cacheCreationTokens,
 
 		Answer: answer,
 
@@ -448,6 +458,7 @@ func relativePath(
 		base,
 		path,
 	)
+
 	if err != nil {
 		return strings.TrimPrefix(
 			path,

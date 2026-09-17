@@ -61,6 +61,11 @@ func (p *Pi) ParseEvent(event map[string]any) EventInfo {
 			ToolName:   toolName,
 		}
 
+	case "message_update":
+		return EventInfo{
+			Usage: extractPiUsage(event),
+		}
+
 	case "message_end":
 		message, ok := event["message"].(map[string]any)
 		if !ok {
@@ -68,20 +73,12 @@ func (p *Pi) ParseEvent(event map[string]any) EventInfo {
 		}
 
 		return EventInfo{
-			IsFinal: true,
-			Answer:  extractTextFromMessage(message),
-			Usage:   extractPiUsage(message),
+			Answer: extractTextFromMessage(message),
 		}
 
-	case "turn_end":
-		message, ok := event["message"].(map[string]any)
-		if !ok {
-			return EventInfo{}
-		}
-
+	case "agent_settled":
 		return EventInfo{
 			IsFinal: true,
-			Answer:  extractTextFromMessage(message),
 		}
 
 	default:
@@ -122,9 +119,9 @@ func extractTextFromMessage(
 }
 
 func extractPiUsage(
-	message map[string]any,
+	event map[string]any,
 ) *Usage {
-	rawUsage, ok := message["usage"].(map[string]any)
+	rawUsage, ok := event["usage"].(map[string]any)
 	if !ok {
 		return nil
 	}

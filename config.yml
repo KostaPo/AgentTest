@@ -1,5 +1,5 @@
 benchmark:
-  project_path: /home/kostapo/IdeaProjects/AccessMarket
+  project_path: /home/kostapo/GolandProjects/kubernetes
   model: deepseek/deepseek-v4-flash-0731
   results_dir: results
   task_file: tasks.yaml

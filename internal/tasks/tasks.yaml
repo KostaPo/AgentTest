@@ -1,7 +1,56 @@
 tasks:
-  - id: smoke-1
-    tier: 0
-    prompt: "Кто ты?"
-  - id: smoke-2
+  #Tier 1 — точечный поиск
+  #Проверяем, умеет ли агент быстро находить конкретный символ, файл или entry point.
+  - id: t1
     tier: 1
-    prompt: "Какую ЛЛМ используешь под капотом?"
+    prompt: "Найди определение структуры Pod в core API types. Укажи файл и путь к определению."
+
+  - id: t2
+    tier: 1
+    prompt: "Где реализована команда kubectl get? Найди основной entry point и укажи связанные с ним файлы."
+
+  - id: t3
+    tier: 1
+    prompt: "Найди основную реализацию scheduler в pkg/scheduler и укажи entry point, с которого начинается обработка Pod."
+
+  #Tier 2 — простой trace
+  #Уже нужно связать несколько частей кода и показать основной путь.
+  - id: t4
+    tier: 2
+    prompt: "Где реализован reconciliation loop Deployment и как он приводит к созданию или обновлению ReplicaSet? Проследи основной call chain и укажи ключевые функции."
+
+  - id: t5
+    tier: 2
+    prompt: "Как kube-apiserver сохраняет объект в etcd? Проследи основной путь от REST storage до вызова etcd и укажи ключевые функции."
+
+  - id: t6
+    tier: 2
+    prompt: "Как scheduler принимает решение о назначении Pod на Node? Проследи основной путь от scheduling queue до binding и укажи ключевые компоненты."
+
+  #Tier 3 — multi-hop trace
+  #Здесь агент уже должен пройти через несколько подсистем.
+  - id: t7
+    tier: 3
+    prompt: "Проследи путь Pod от создания через kube-apiserver до момента, когда kubelet начинает его синхронизацию. Покажи основные этапы, пакеты и ключевые функции по всей цепочке."
+
+  - id: t8
+    tier: 3
+    prompt: "Проследи полный путь Deployment от изменения объекта до появления или обновления Pod через ReplicaSet. Покажи основные контроллеры, очереди и ключевые функции."
+
+  - id: t9
+    tier: 3
+    prompt: "Проследи путь PersistentVolumeClaim от создания до binding с PersistentVolume. Определи основные контроллеры, очереди и функции, участвующие в этом процессе."
+
+  #Tier 4 — архитектурное исследование
+  #Здесь уже нужно восстановить устройство подсистемы по нескольким участкам исходников.
+  - id: t10
+    tier: 4
+    prompt: "Исследуй архитектуру Kubernetes controllers на примере нескольких конкретных контроллеров. Объясни общий паттерн event → queue → worker → reconciliation и укажи конкретные реализации."
+
+  - id: t11
+    tier: 4
+    prompt: "Исследуй архитектуру Kubernetes scheduler по исходному коду. Объясни scheduling queue, основные scheduling phases, extension points и путь от Pod до binding."
+
+  - id: t12
+    tier: 4
+    prompt: "Исследуй полный lifecycle Pod в Kubernetes: от создания через API server до запуска контейнера на node. Свяжи control plane, kubelet, runtime и обновление Pod status, указав ключевые компоненты и функции."
