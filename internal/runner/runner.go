@@ -367,8 +367,7 @@ func (r *Runner) Run(
 	exitCode := 0
 
 	if waitErr != nil {
-		if exitErr, ok :=
-			waitErr.(*exec.ExitError); ok {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
 			exitCode = -1
