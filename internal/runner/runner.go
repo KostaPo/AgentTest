@@ -116,9 +116,7 @@ func (r *Runner) Run(
 		"result.json",
 	)
 
-	stdoutFile, err := os.Create(
-		stdoutPath,
-	)
+	stdoutFile, err := os.Create(stdoutPath)
 	if err != nil {
 		return Result{}, fmt.Errorf(
 			"create stdout file: %w",
@@ -127,9 +125,7 @@ func (r *Runner) Run(
 	}
 	defer stdoutFile.Close()
 
-	stderrFile, err := os.Create(
-		stderrPath,
-	)
+	stderrFile, err := os.Create(stderrPath)
 	if err != nil {
 		return Result{}, fmt.Errorf(
 			"create stderr file: %w",
@@ -138,9 +134,7 @@ func (r *Runner) Run(
 	}
 	defer stderrFile.Close()
 
-	eventsFile, err := os.Create(
-		eventsPath,
-	)
+	eventsFile, err := os.Create(eventsPath)
 	if err != nil {
 		return Result{}, fmt.Errorf(
 			"create events file: %w",
@@ -281,8 +275,7 @@ func (r *Runner) Run(
 				answer = info.Answer
 			}
 
-			if info.IsFinal &&
-				answerMs == nil {
+			if info.IsFinal && answerMs == nil {
 				elapsed := time.Since(
 					started,
 				).Milliseconds()
@@ -291,20 +284,41 @@ func (r *Runner) Run(
 			}
 
 			if info.Usage != nil {
-				inputTokens =
-					info.Usage.InputTokens
+				if info.UsageDelta {
+					// Pi: usage belongs to one completed assistant
+					// message, so accumulate it across the run.
+					inputTokens +=
+						info.Usage.InputTokens
 
-				outputTokens =
-					info.Usage.OutputTokens
+					outputTokens +=
+						info.Usage.OutputTokens
 
-				reasoningTokens =
-					info.Usage.ReasoningTokens
+					reasoningTokens +=
+						info.Usage.ReasoningTokens
 
-				cacheReadTokens =
-					info.Usage.CacheReadTokens
+					cacheReadTokens +=
+						info.Usage.CacheReadTokens
 
-				cacheCreationTokens =
-					info.Usage.CacheCreationTokens
+					cacheCreationTokens +=
+						info.Usage.CacheCreationTokens
+				} else {
+					// Claude: final result usage already represents
+					// the total usage for the run.
+					inputTokens =
+						info.Usage.InputTokens
+
+					outputTokens =
+						info.Usage.OutputTokens
+
+					reasoningTokens =
+						info.Usage.ReasoningTokens
+
+					cacheReadTokens =
+						info.Usage.CacheReadTokens
+
+					cacheCreationTokens =
+						info.Usage.CacheCreationTokens
+				}
 			}
 
 			normalized := map[string]any{
@@ -367,7 +381,8 @@ func (r *Runner) Run(
 	exitCode := 0
 
 	if waitErr != nil {
-		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+		if exitErr, ok :=
+			waitErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
 			exitCode = -1

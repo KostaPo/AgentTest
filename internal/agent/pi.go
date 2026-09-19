@@ -62,9 +62,9 @@ func (p *Pi) ParseEvent(event map[string]any) EventInfo {
 		}
 
 	case "message_update":
-		return EventInfo{
-			Usage: extractPiUsage(event),
-		}
+		// message_update.usage is a cumulative snapshot used for
+		// streaming/progress updates. Do not add it to final totals.
+		return EventInfo{}
 
 	case "message_end":
 		message, ok := event["message"].(map[string]any)
@@ -72,9 +72,20 @@ func (p *Pi) ParseEvent(event map[string]any) EventInfo {
 			return EventInfo{}
 		}
 
-		return EventInfo{
+		info := EventInfo{
 			Answer: extractTextFromMessage(message),
 		}
+
+		role, _ := message["role"].(string)
+
+		// Each completed assistant message has its own usage.
+		// The runner will accumulate these usages across the run.
+		if role == "assistant" {
+			info.Usage = extractPiUsage(message)
+			info.UsageDelta = true
+		}
+
+		return info
 
 	case "agent_settled":
 		return EventInfo{
@@ -119,9 +130,9 @@ func extractTextFromMessage(
 }
 
 func extractPiUsage(
-	event map[string]any,
+	message map[string]any,
 ) *Usage {
-	rawUsage, ok := event["usage"].(map[string]any)
+	rawUsage, ok := message["usage"].(map[string]any)
 	if !ok {
 		return nil
 	}
