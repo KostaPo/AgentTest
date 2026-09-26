@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"agenttest/internal/agent"
+	"agenttest/internal/eval"
+	"agenttest/internal/tasks"
 )
 
 type Config struct {
@@ -44,6 +46,12 @@ type Result struct {
 	CacheReadTokens     int64 `json:"cache_read_tokens"`
 	CacheCreationTokens int64 `json:"cache_creation_tokens"`
 
+	RelevantFilesFound     []string `json:"relevant_files_found"`
+	RelevantFilesMissing   []string `json:"relevant_files_missing"`
+	AlsoOKFilesFound       []string `json:"also_ok_files_found"`
+	RelevantSymbolsFound   []string `json:"relevant_symbols_found"`
+	RelevantSymbolsMissing []string `json:"relevant_symbols_missing"`
+
 	Answer string `json:"answer,omitempty"`
 
 	ExitCode  int  `json:"exit_code"`
@@ -59,6 +67,8 @@ type RunRequest struct {
 	TaskID string
 	Tier   int
 	Prompt string
+
+	Expected tasks.Expected
 
 	Agent agent.Agent
 	Model string
@@ -116,7 +126,9 @@ func (r *Runner) Run(
 		"result.json",
 	)
 
-	stdoutFile, err := os.Create(stdoutPath)
+	stdoutFile, err := os.Create(
+		stdoutPath,
+	)
 	if err != nil {
 		return Result{}, fmt.Errorf(
 			"create stdout file: %w",
@@ -125,7 +137,9 @@ func (r *Runner) Run(
 	}
 	defer stdoutFile.Close()
 
-	stderrFile, err := os.Create(stderrPath)
+	stderrFile, err := os.Create(
+		stderrPath,
+	)
 	if err != nil {
 		return Result{}, fmt.Errorf(
 			"create stderr file: %w",
@@ -134,7 +148,9 @@ func (r *Runner) Run(
 	}
 	defer stderrFile.Close()
 
-	eventsFile, err := os.Create(eventsPath)
+	eventsFile, err := os.Create(
+		eventsPath,
+	)
 	if err != nil {
 		return Result{}, fmt.Errorf(
 			"create events file: %w",
@@ -275,7 +291,8 @@ func (r *Runner) Run(
 				answer = info.Answer
 			}
 
-			if info.IsFinal && answerMs == nil {
+			if info.IsFinal &&
+				answerMs == nil {
 				elapsed := time.Since(
 					started,
 				).Milliseconds()
@@ -285,8 +302,9 @@ func (r *Runner) Run(
 
 			if info.Usage != nil {
 				if info.UsageDelta {
-					// Pi: usage belongs to one completed assistant
-					// message, so accumulate it across the run.
+					// Pi: usage belongs to one completed
+					// assistant message, so accumulate it
+					// across the run.
 					inputTokens +=
 						info.Usage.InputTokens
 
@@ -302,8 +320,8 @@ func (r *Runner) Run(
 					cacheCreationTokens +=
 						info.Usage.CacheCreationTokens
 				} else {
-					// Claude: final result usage already represents
-					// the total usage for the run.
+					// Claude: final result usage already
+					// represents the total usage for the run.
 					inputTokens =
 						info.Usage.InputTokens
 
@@ -389,6 +407,18 @@ func (r *Runner) Run(
 		}
 	}
 
+	relevance, err := eval.EvaluateFile(
+		req.Expected,
+		eventsPath,
+		answer,
+	)
+	if err != nil {
+		return Result{}, fmt.Errorf(
+			"evaluate relevance: %w",
+			err,
+		)
+	}
+
 	result := Result{
 		RunID:  req.RunID,
 		Agent:  req.Agent.Name(),
@@ -416,6 +446,12 @@ func (r *Runner) Run(
 		ReasoningTokens:     reasoningTokens,
 		CacheReadTokens:     cacheReadTokens,
 		CacheCreationTokens: cacheCreationTokens,
+
+		RelevantFilesFound:     relevance.RelevantFilesFound,
+		RelevantFilesMissing:   relevance.RelevantFilesMissing,
+		AlsoOKFilesFound:       relevance.AlsoOKFilesFound,
+		RelevantSymbolsFound:   relevance.RelevantSymbolsFound,
+		RelevantSymbolsMissing: relevance.RelevantSymbolsMissing,
 
 		Answer: answer,
 

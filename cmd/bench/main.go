@@ -101,17 +101,16 @@ func main() {
 				runID,
 			)
 
-			result, err := r.Run(
-				runner.RunRequest{
-					RunID:     runID,
-					TaskID:    task.ID,
-					Tier:      task.Tier,
-					Prompt:    task.Prompt,
-					Agent:     a,
-					Model:     cfg.Benchmark.Model,
-					Reasoning: cfg.Benchmark.Reasoning,
-				},
-			)
+			result, err := r.Run(runner.RunRequest{
+				RunID:     runID,
+				TaskID:    task.ID,
+				Tier:      task.Tier,
+				Prompt:    task.Prompt,
+				Expected:  task.Expected,
+				Agent:     a,
+				Model:     cfg.Benchmark.Model,
+				Reasoning: cfg.Benchmark.Reasoning,
+			})
 
 			if err != nil {
 				log.Printf(
@@ -138,10 +137,26 @@ func main() {
 			}
 
 			fmt.Printf(
-				" input=%dtok output=%dtok reasoning=%dtok process_ok=%t\n",
+				" input=%dtok output=%dtok reasoning=%dtok",
 				result.InputTokens,
 				result.OutputTokens,
 				result.ReasoningTokens,
+			)
+
+			fmt.Printf(
+				" relevant_files=%d/%d",
+				len(result.RelevantFilesFound),
+				len(result.RelevantFilesFound)+len(result.RelevantFilesMissing),
+			)
+
+			fmt.Printf(
+				" relevant_symbols=%d/%d",
+				len(result.RelevantSymbolsFound),
+				len(result.RelevantSymbolsFound)+len(result.RelevantSymbolsMissing),
+			)
+
+			fmt.Printf(
+				" process_ok=%t\n",
 				result.ProcessOK,
 			)
 		}

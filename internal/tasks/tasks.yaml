@@ -1,56 +1,297 @@
+# Бенчмарк для coding-агентов: kubernetes/kubernetes (облегчённая версия)
+#
+# Пути и символы сверены с коммитом ниже. При смене коммита перепроверять.
+#
+# Схема та же, что в исходном наборе, плюс один ключ:
+#   files    — обязательные файлы; без них ответ неполный
+#   also_ok  — допустимые/связанные файлы; не обязательны и не считаются галлюцинацией
+#   symbols  — Тип.Метод или функция (квалифицированно: голые Create/Bind неоднозначны)
+#
+# Строки "# chain:" и "# ждём:" — справка для ручной проверки или LLM-судьи,
+# скорингом не разбираются.
+
+meta:
+  repo: kubernetes/kubernetes
+  commit: 400031d69530e018d5c001a922d3c5d2afaba954   # master на 2026-09-20
+
 tasks:
-  #Tier 1 — точечный поиск
-  #Проверяем, умеет ли агент быстро находить конкретный символ, файл или entry point.
+  # ── Tier 1 — точечный поиск ─────────────────────────────────────────────────
+
   - id: t1
     tier: 1
-    prompt: "Найди определение структуры Pod в core API types. Укажи файл и путь к определению."
+    prompt: "Найди определение публичного типа Pod (API v1). Укажи файл и место определения."
+    # Ловушка: pkg/apis/core/types.go — внутренний тип с тем же именем, ответом не считается.
+    expected:
+      files:
+        - staging/src/k8s.io/api/core/v1/types.go
+      symbols:
+        - Pod
 
   - id: t2
     tier: 1
     prompt: "Где реализована команда kubectl get? Найди основной entry point и укажи связанные с ним файлы."
+    expected:
+      files:
+        - staging/src/k8s.io/kubectl/pkg/cmd/get/get.go
+      also_ok:
+        - staging/src/k8s.io/kubectl/pkg/cmd/cmd.go       # регистрация: get.NewCmdGet
+        - cmd/kubectl/kubectl.go                          # настоящий main
+        - staging/src/k8s.io/kubectl/pkg/cmd/get/get_flags.go
+      symbols:
+        - NewCmdGet
+        - GetOptions.Run
 
   - id: t3
     tier: 1
-    prompt: "Найди основную реализацию scheduler в pkg/scheduler и укажи entry point, с которого начинается обработка Pod."
+    prompt: "Найди основную реализацию scheduler в pkg/scheduler и укажи, откуда начинается обработка одного Pod."
+    # Цикл вынесен из scheduler.go в schedule_one.go; строчного scheduleOne больше нет.
+    expected:
+      files:
+        - pkg/scheduler/schedule_one.go
+      also_ok:
+        - pkg/scheduler/scheduler.go                      # Scheduler, Run
+      symbols:
+        - Scheduler.ScheduleOne
+        - Scheduler.Run
 
-  #Tier 2 — простой trace
-  #Уже нужно связать несколько частей кода и показать основной путь.
+  - id: t13
+    tier: 1
+    prompt: "Где реализована команда kubectl deploy? Найди entry point."
+    # Контроль на галлюцинации. Такой команды нет.
+    # Верно: сказать, что её нет (ближайшее: rollout, create deployment, apply).
+    # Неверно: назвать любой путь как «реализацию».
+    expected:
+      files: []
+
+  # ── Tier 2 — простой trace ──────────────────────────────────────────────────
+
   - id: t4
     tier: 2
     prompt: "Где реализован reconciliation loop Deployment и как он приводит к созданию или обновлению ReplicaSet? Проследи основной call chain и укажи ключевые функции."
+    # chain: syncDeployment → rolloutRolling → getAllReplicaSetsAndSyncRevision → getNewReplicaSet (создание RS)
+    #        rolloutRolling → reconcileNewReplicaSet → scaleReplicaSet (обновление)
+    expected:
+      files:
+        - pkg/controller/deployment/deployment_controller.go
+        - pkg/controller/deployment/sync.go
+      also_ok:
+        - pkg/controller/deployment/rolling.go
+        - pkg/controller/deployment/recreate.go
+      symbols:
+        - DeploymentController.syncDeployment
+        - DeploymentController.rolloutRolling
+        - DeploymentController.getNewReplicaSet
+        - DeploymentController.scaleReplicaSet
 
   - id: t5
     tier: 2
-    prompt: "Как kube-apiserver сохраняет объект в etcd? Проследи основной путь от REST storage до вызова etcd и укажи ключевые функции."
+    prompt: "Как kube-apiserver сохраняет создаваемый объект в etcd? Проследи путь от registry.Store.Create до вызова etcd и укажи ключевые функции."
+    # Промпт сужен до Create: реальный вызов Update в etcd3 — GuaranteedUpdate, путь у него другой.
+    # chain: Store.Create → DryRunnableStorage.Create → CacheDelegator.Create → etcd3 store.Create
+    expected:
+      files:
+        - staging/src/k8s.io/apiserver/pkg/registry/generic/registry/store.go
+        - staging/src/k8s.io/apiserver/pkg/storage/etcd3/store.go
+      also_ok:
+        - staging/src/k8s.io/apiserver/pkg/registry/generic/registry/dryrun.go
+        - staging/src/k8s.io/apiserver/pkg/storage/cacher/delegator.go
+        - staging/src/k8s.io/apiserver/pkg/endpoints/handlers/create.go   # createHandler, выше по стеку
+      symbols:
+        - Store.Create
+        - DryRunnableStorage.Create
+        - CacheDelegator.Create
+        - store.Create                                    # etcd3, приватный тип
 
   - id: t6
     tier: 2
-    prompt: "Как scheduler принимает решение о назначении Pod на Node? Проследи основной путь от scheduling queue до binding и укажи ключевые компоненты."
+    prompt: "Как scheduler выбирает Node для Pod? Проследи путь от извлечения Pod из очереди до вызова bind и укажи ключевые функции."
+    # chain: ScheduleOne → scheduleOnePod → schedulingCycle → schedulingAlgorithm → SchedulePod
+    #        scheduleOnePod → runBindingCycle (в goroutine) → bindingCycle → bind → RunBindPlugins
+    expected:
+      files:
+        - pkg/scheduler/schedule_one.go
+        - pkg/scheduler/backend/queue/scheduling_queue.go
+      also_ok:
+        - pkg/scheduler/algorithm.go                      # SchedulePod вынесен сюда
+        - pkg/scheduler/backend/cache/cache.go            # AssumePod, снимок
+        - pkg/scheduler/framework/runtime/framework.go
+      symbols:
+        - PriorityQueue.Pop
+        - Scheduler.ScheduleOne
+        - Scheduler.schedulingCycle
+        - SchedulingAlgorithm.SchedulePod
+        - cacheImpl.AssumePod
+        - Scheduler.bindingCycle
+        - Scheduler.bind
+        - frameworkImpl.RunBindPlugins
 
-  #Tier 3 — multi-hop trace
-  #Здесь агент уже должен пройти через несколько подсистем.
+  # ── Tier 3 — multi-hop trace ────────────────────────────────────────────────
+
   - id: t7
     tier: 3
     prompt: "Проследи путь Pod от создания через kube-apiserver до момента, когда kubelet начинает его синхронизацию. Покажи основные этапы, пакеты и ключевые функции по всей цепочке."
+    # Без binding kubelet Pod не увидит, поэтому BindingREST обязателен.
+    # chain: BindingREST.Create → assignPod (пишет spec.nodeName)
+    #        NewSourceApiserver → PodConfig.Updates() → syncLoop (связь через канал, не вызов)
+    #        syncLoop → syncLoopIteration → HandlePodAdditions → podWorkers.UpdatePod → podWorkerLoop → SyncPod
+    expected:
+      files:
+        - pkg/registry/core/pod/storage/storage.go        # не staging: в старом наборе путь был неверный
+        - pkg/kubelet/config/apiserver.go
+        - pkg/kubelet/kubelet.go
+        - pkg/kubelet/pod_workers.go
+      also_ok:
+        - pkg/scheduler/schedule_one.go
+        - pkg/kubelet/config/config.go
+      symbols:
+        - BindingREST.Create
+        - BindingREST.assignPod
+        - NewSourceApiserver
+        - Kubelet.syncLoopIteration
+        - Kubelet.HandlePodAdditions
+        - podWorkers.UpdatePod
+        - Kubelet.SyncPod
 
   - id: t8
     tier: 3
     prompt: "Проследи полный путь Deployment от изменения объекта до появления или обновления Pod через ReplicaSet. Покажи основные контроллеры, очереди и ключевые функции."
+    # chain: syncDeployment → rolloutRolling → getAllReplicaSetsAndSyncRevision (создаёт/обновляет RS)
+    #        addRS → enqueueRS; processNextWorkItem → syncHandler (= syncReplicaSet)
+    #        syncReplicaSet → manageReplicas → slowStartBatch → podControl.CreatePods (в closure)
+    # Отдельного replica_set_controller.go нет: всё в replica_set.go.
+    expected:
+      files:
+        - pkg/controller/deployment/deployment_controller.go
+        - pkg/controller/replicaset/replica_set.go
+        - pkg/controller/controller_utils.go              # expectations и PodControl
+      also_ok:
+        - pkg/controller/deployment/sync.go
+        - pkg/controller/deployment/rolling.go
+      symbols:
+        - DeploymentController.syncDeployment
+        - ReplicaSetController.syncReplicaSet
+        - ReplicaSetController.manageReplicas
+        - slowStartBatch
+        - ControllerExpectations.ExpectCreations
+        - RealPodControl.CreatePods
 
   - id: t9
     tier: 3
     prompt: "Проследи путь PersistentVolumeClaim от создания до binding с PersistentVolume. Определи основные контроллеры, очереди и функции, участвующие в этом процессе."
+    # Очередей две: claimQueue и volumeQueue.
+    # chain: claimWorker → processNextClaimWorkItem → syncClaimByKey → updateClaim → syncClaim
+    #        → syncUnboundClaim → bind → bindVolumeToClaim
+    # persistentvolumeclaim/persistentvolume_claim_controller.go из старого набора не существует.
+    expected:
+      files:
+        - pkg/controller/volume/persistentvolume/pv_controller_base.go   # очереди, воркеры
+        - pkg/controller/volume/persistentvolume/pv_controller.go        # логика binding
+        - pkg/controller/volume/persistentvolume/index.go                # подбор PV
+      also_ok:
+        - pkg/scheduler/framework/plugins/volumebinding/binder.go        # WaitForFirstConsumer
+      symbols:
+        - PersistentVolumeController.claimWorker
+        - PersistentVolumeController.syncClaimByKey
+        - PersistentVolumeController.syncClaim
+        - PersistentVolumeController.syncUnboundClaim
+        - PersistentVolumeController.bindVolumeToClaim
+        - PersistentVolumeController.syncVolume
 
-  #Tier 4 — архитектурное исследование
-  #Здесь уже нужно восстановить устройство подсистемы по нескольким участкам исходников.
+  - id: t14
+    tier: 3
+    prompt: "Что происходит, когда kubelet перестаёт обновлять статус Node? Кто выставляет taint и кто выселяет Pod'ы? Покажи ключевые функции."
+    # Поведенческий вопрос: подсказок о пакетах нет.
+    # chain: monitorNodeHealth → processTaintBaseEviction; tainteviction: handleNodeUpdate → processPodOnNode
+    expected:
+      files:
+        - pkg/controller/nodelifecycle/node_lifecycle_controller.go
+        - pkg/controller/tainteviction/taint_eviction.go
+      symbols:
+        - Controller.monitorNodeHealth
+        - Controller.processTaintBaseEviction
+        - Controller.doNoExecuteTaintingPass
+        - Controller.handleNodeUpdate
+        - Controller.processPodOnNode
+
+  # ── Tier 4 — архитектурное исследование ─────────────────────────────────────
+
   - id: t10
     tier: 4
-    prompt: "Исследуй архитектуру Kubernetes controllers на примере нескольких конкретных контроллеров. Объясни общий паттерн event → queue → worker → reconciliation и укажи конкретные реализации."
+    # Контроллеры названы в промпте: иначе выбор Job/StatefulSet считался бы ошибкой.
+    prompt: "Исследуй архитектуру Kubernetes controllers на примере Deployment, ReplicaSet и Namespace controller. Объясни общий паттерн event → queue → worker → reconciliation и укажи конкретные реализации."
+    # ждём: handlers от shared informer кладут ключ в workqueue; worker → processNextWorkItem →
+    #       syncHandler по ключу; ошибка → requeue с rate limiting, успех → Forget;
+    #       один ключ обрабатывается одним воркером; чтение из кеша informer;
+    #       у ReplicaSet есть expectations, у Namespace controller нет.
+    expected:
+      files:
+        - pkg/controller/deployment/deployment_controller.go
+        - pkg/controller/replicaset/replica_set.go
+        - pkg/controller/namespace/namespace_controller.go
+      also_ok:
+        - pkg/controller/controller_utils.go
+        - cmd/kube-controller-manager/app/apps.go         # wiring
+        - staging/src/k8s.io/client-go/tools/cache/shared_informer.go
+      symbols:
+        - DeploymentController.worker
+        - DeploymentController.processNextWorkItem
+        - DeploymentController.syncDeployment
+        - ReplicaSetController.syncReplicaSet
+        - NamespaceController.worker
+        - NamespaceController.syncNamespaceFromKey
 
   - id: t11
     tier: 4
     prompt: "Исследуй архитектуру Kubernetes scheduler по исходному коду. Объясни scheduling queue, основные scheduling phases, extension points и путь от Pod до binding."
+    # ждём: очередь activeQ / backoffQ / unschedulable и возврат из unschedulable в active;
+    #       informer-handlers (eventhandlers.go) наполняют очередь и кеш;
+    #       extension points: PreEnqueue, QueueSort, PreFilter, Filter, PostFilter, PreScore,
+    #       Score, Reserve, Permit, PreBind, Bind, PostBind;
+    #       scheduling cycle синхронный, binding cycle асинхронный;
+    #       assume в кеше до Bind.
+    expected:
+      files:
+        - pkg/scheduler/scheduler.go
+        - pkg/scheduler/schedule_one.go
+        - pkg/scheduler/backend/queue/scheduling_queue.go
+        - pkg/scheduler/framework/runtime/framework.go
+      also_ok:
+        - pkg/scheduler/framework/interface.go                        # Framework
+        - staging/src/k8s.io/kube-scheduler/framework/interface.go    # интерфейсы плагинов теперь здесь
+        - pkg/scheduler/algorithm.go
+        - pkg/scheduler/backend/cache/cache.go
+        - pkg/scheduler/eventhandlers.go
+      symbols:
+        - Scheduler
+        - PriorityQueue
+        - Framework
+        - SchedulingAlgorithm.SchedulePod
+        - frameworkImpl.RunFilterPlugins
+        - frameworkImpl.RunBindPlugins
 
   - id: t12
     tier: 4
     prompt: "Исследуй полный lifecycle Pod в Kubernetes: от создания через API server до запуска контейнера на node. Свяжи control plane, kubelet, runtime и обновление Pod status, указав ключевые компоненты и функции."
+    # ждём: различает два SyncPod (Kubelet и kubeGenericRuntimeManager); CRI как граница
+    #       kubelet ↔ runtime; статус идёт generateAPIPodStatus → status manager → PATCH в API;
+    #       scheduler и binding между create и kubelet.
+    expected:
+      files:
+        - pkg/registry/core/pod/storage/storage.go
+        - pkg/scheduler/schedule_one.go
+        - pkg/kubelet/kubelet.go
+        - pkg/kubelet/kuberuntime/kuberuntime_manager.go
+        - pkg/kubelet/status/status_manager.go
+      also_ok:
+        - pkg/kubelet/kuberuntime/kuberuntime_container.go
+        - pkg/kubelet/kubelet_pods.go                     # generateAPIPodStatus
+        - staging/src/k8s.io/cri-client/pkg/remote_runtime.go
+      symbols:
+        - BindingREST.Create
+        - Scheduler.ScheduleOne
+        - Kubelet.SyncPod                                 # оркестрация на уровне kubelet
+        - kubeGenericRuntimeManager.SyncPod               # другой слой: sandbox и контейнеры
+        - kubeGenericRuntimeManager.startContainer
+        - remoteRuntimeService.RunPodSandbox
+        - remoteRuntimeService.StartContainer
+        - manager.SetPodStatus                            # status manager, не Kubelet

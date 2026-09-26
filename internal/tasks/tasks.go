@@ -8,13 +8,26 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type Meta struct {
+	Repo   string `yaml:"repo"`
+	Commit string `yaml:"commit"`
+}
+
+type Expected struct {
+	Files   []string `yaml:"files"`
+	AlsoOK  []string `yaml:"also_ok"`
+	Symbols []string `yaml:"symbols"`
+}
+
 type Task struct {
-	ID     string `yaml:"id"`
-	Tier   int    `yaml:"tier"`
-	Prompt string `yaml:"prompt"`
+	ID       string   `yaml:"id"`
+	Tier     int      `yaml:"tier"`
+	Prompt   string   `yaml:"prompt"`
+	Expected Expected `yaml:"expected"`
 }
 
 type file struct {
+	Meta  Meta   `yaml:"meta"`
 	Tasks []Task `yaml:"tasks"`
 }
 
