@@ -1,0 +1,247 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Бенчмарк для coding-агентов: kubernetes/kubernetes (облегчённая версия)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Пути и символы сверены с коммитом из meta. При смене коммита перепроверять.
+#
+# Схема:
+#   files    — обязательные файлы; без них ответ неполный
+#   also_ok  — допустимые/связанные файлы; не обязательны и не считаются галлюцинацией
+#   symbols  — Тип.Метод или функция (квалифицированно: голые Create/Bind неоднозначны)
+#
+# Строки "# chain:" и "# ждём:" — справка для ручной проверки или LLM-судьи,
+# скорингом не разбираются.
+#
+# Задачи-ловушки (t1.4, t2.4): пустой files: [] означает, что верный ответ —
+# опровержение ложной предпосылки, а не поиск «подходящего» пути.
+
+meta:
+  repo: kubernetes/kubernetes
+  commit: 400031d69530e018d5c001a922d3c5d2afaba954   # master на 2026-09-20
+
+tasks:
+
+  # ── Tier 1 — точечный поиск ─────────────────────────────────────────────────
+
+  - id: t1.1
+    tier: 1
+    prompt: "Найди определение публичного типа Pod (API v1). Укажи файл и место определения."
+    # Ловушка: pkg/apis/core/types.go — внутренний тип с тем же именем, ответом не считается.
+    expected:
+      files:
+        - staging/src/k8s.io/api/core/v1/types.go
+      symbols:
+        - Pod
+
+  - id: t1.2
+    tier: 1
+    prompt: "Где реализована команда kubectl get? Найди основной entry point и укажи связанные с ним файлы."
+    expected:
+      files:
+        - staging/src/k8s.io/kubectl/pkg/cmd/get/get.go
+      also_ok:
+        - staging/src/k8s.io/kubectl/pkg/cmd/cmd.go       # регистрация: get.NewCmdGet
+        - cmd/kubectl/kubectl.go                          # настоящий main
+        - staging/src/k8s.io/kubectl/pkg/cmd/get/get_flags.go
+      symbols:
+        - NewCmdGet
+        - GetOptions.Run
+
+  - id: t1.3
+    tier: 1
+    prompt: "Найди основную реализацию scheduler в pkg/scheduler и укажи, откуда начинается обработка одного Pod."
+    # Цикл вынесен из scheduler.go в schedule_one.go; строчного scheduleOne больше нет.
+    expected:
+      files:
+        - pkg/scheduler/schedule_one.go
+      also_ok:
+        - pkg/scheduler/scheduler.go                      # Scheduler, Run
+      symbols:
+        - Scheduler.ScheduleOne
+        - Scheduler.Run
+
+  - id: t1.4
+    tier: 1
+    prompt: "Где реализована команда kubectl deploy? Найди entry point."
+    # Контроль на галлюцинации. Такой команды нет.
+    # Верно: сказать, что её нет (ближайшее: rollout, create deployment, apply).
+    # Неверно: назвать любой путь как «реализацию».
+    expected:
+      files: []
+
+  # ── Tier 2 — простой trace ──────────────────────────────────────────────────
+
+  - id: t2.1
+    tier: 2
+    prompt: "Где реализован reconciliation loop Deployment и как он приводит к созданию или обновлению ReplicaSet? Проследи основной call chain и укажи ключевые функции."
+    # chain: syncDeployment → rolloutRolling → getAllReplicaSetsAndSyncRevision → getNewReplicaSet (создание RS)
+    #        rolloutRolling → reconcileNewReplicaSet → scaleReplicaSet (обновление)
+    expected:
+      files:
+        - pkg/controller/deployment/deployment_controller.go
+        - pkg/controller/deployment/sync.go
+      also_ok:
+        - pkg/controller/deployment/rolling.go
+        - pkg/controller/deployment/recreate.go
+      symbols:
+        - DeploymentController.syncDeployment
+        - DeploymentController.rolloutRolling
+        - DeploymentController.getNewReplicaSet
+        - DeploymentController.scaleReplicaSet
+
+  - id: t2.2
+    tier: 2
+    prompt: "Как kube-apiserver сохраняет создаваемый объект в etcd? Проследи путь от registry.Store.Create до вызова etcd и укажи ключевые функции."
+    # Промпт сужен до Create: реальный вызов Update в etcd3 — GuaranteedUpdate, путь у него другой.
+    # chain: Store.Create → DryRunnableStorage.Create → CacheDelegator.Create → etcd3 store.Create
+    expected:
+      files:
+        - staging/src/k8s.io/apiserver/pkg/registry/generic/registry/store.go
+        - staging/src/k8s.io/apiserver/pkg/storage/etcd3/store.go
+      also_ok:
+        - staging/src/k8s.io/apiserver/pkg/registry/generic/registry/dryrun.go
+        - staging/src/k8s.io/apiserver/pkg/storage/cacher/delegator.go
+        - staging/src/k8s.io/apiserver/pkg/endpoints/handlers/create.go   # createHandler, выше по стеку
+      symbols:
+        - Store.Create
+        - DryRunnableStorage.Create
+        - CacheDelegator.Create
+        - store.Create                                    # etcd3, приватный тип
+
+  - id: t2.3
+    tier: 2
+    prompt: "Как scheduler выбирает Node для Pod? Проследи путь от извлечения Pod из очереди до вызова bind и укажи ключевые функции."
+    # chain: ScheduleOne → scheduleOnePod → schedulingCycle → schedulingAlgorithm → SchedulePod
+    #        scheduleOnePod → runBindingCycle (в goroutine) → bindingCycle → bind → RunBindPlugins
+    expected:
+      files:
+        - pkg/scheduler/schedule_one.go
+        - pkg/scheduler/backend/queue/scheduling_queue.go
+      also_ok:
+        - pkg/scheduler/algorithm.go                      # SchedulePod вынесен сюда
+        - pkg/scheduler/backend/cache/cache.go            # AssumePod, снимок
+        - pkg/scheduler/framework/runtime/framework.go
+      symbols:
+        - PriorityQueue.Pop
+        - Scheduler.ScheduleOne
+        - Scheduler.schedulingCycle
+        - SchedulingAlgorithm.SchedulePod
+        - cacheImpl.AssumePod
+        - Scheduler.bindingCycle
+        - Scheduler.bind
+        - frameworkImpl.RunBindPlugins
+
+  - id: t2.4
+    tier: 2
+    prompt: "Как scheduler записывает результат привязки Pod к Node напрямую в etcd? Проследи путь от Scheduler.bind до вызова etcd и укажи ключевые функции."
+    # Контроль на галлюцинации (ложная предпосылка). Scheduler не ходит в etcd: в pkg/scheduler
+    # нет etcd-клиента, а запись идёт только через kube-apiserver.
+    # Верно: опровергнуть предпосылку и показать реальный путь до границы apiserver:
+    #   Scheduler.bind → frameworkImpl.RunBindPlugins → DefaultBinder.Bind
+    #   → util.BindPod (clientset: CoreV1().Pods(ns).Bind) либо APICacher.BindPod
+    #   → [HTTP к apiserver] → BindingREST.Create → assignPod → Store/etcd (уже внутри apiserver).
+    # Неверно: описать «прямой вызов etcd» из scheduler, выдумать etcd-клиент или путь/функцию в pkg/scheduler.
+    # ждём: явное «напрямую в etcd нет»; упоминание, что etcd пишет только apiserver.
+    expected:
+      files: []
+      also_ok:                                            # реальный путь; НЕ ответ на вопрос «до etcd»
+        - pkg/scheduler/schedule_one.go
+        - pkg/scheduler/framework/plugins/defaultbinder/default_binder.go
+        - pkg/scheduler/util/utils.go                     # BindPod
+        - pkg/scheduler/framework/runtime/framework.go
+        - pkg/registry/core/pod/storage/storage.go        # BindingREST, уже в apiserver
+      symbols: []
+
+  # ── Tier 3 — multi-hop trace ────────────────────────────────────────────────
+
+  - id: t3.1
+    tier: 3
+    prompt: "Проследи путь Pod от создания через kube-apiserver до момента, когда kubelet начинает его синхронизацию. Покажи основные этапы, пакеты и ключевые функции по всей цепочке."
+    # Без binding kubelet Pod не увидит, поэтому BindingREST обязателен.
+    # chain: BindingREST.Create → assignPod (пишет spec.nodeName)
+    #        NewSourceApiserver → PodConfig.Updates() → syncLoop (связь через канал, не вызов)
+    #        syncLoop → syncLoopIteration → HandlePodAdditions → podWorkers.UpdatePod → podWorkerLoop → SyncPod
+    expected:
+      files:
+        - pkg/registry/core/pod/storage/storage.go        # не staging: в старом наборе путь был неверный
+        - pkg/kubelet/config/apiserver.go
+        - pkg/kubelet/kubelet.go
+        - pkg/kubelet/pod_workers.go
+      also_ok:
+        - pkg/scheduler/schedule_one.go
+        - pkg/kubelet/config/config.go
+      symbols:
+        - BindingREST.Create
+        - BindingREST.assignPod
+        - NewSourceApiserver
+        - Kubelet.syncLoopIteration
+        - Kubelet.HandlePodAdditions
+        - podWorkers.UpdatePod
+
+  - id: t3.2
+    tier: 3
+    prompt: "Проследи путь изменения Service/Pod до правил iptables на узле: как контроллер EndpointSlice создаёт или обновляет EndpointSlice и как kube-proxy превращает их в правила. Покажи этапы, пакеты и ключевые функции по всей цепочке."
+    # Две независимые половины, связанные через apiserver (informer/watch), а не вызовом.
+    # Реконсайлер лежит в staging (k8s.io/endpointslice), не в pkg/controller/endpointslice: в старых версиях путь был другой.
+    # chain: Controller.syncService → Reconciler.Reconcile → reconcileByAddressType → finalize (create/update/delete через клиент)
+    #        --- apiserver, watch ---
+    #        ProxyServer.Run → NewEndpointSliceConfig/NewServiceConfig → handleAddEndpointSlice → Proxier.OnEndpointSliceAdd
+    #        → EndpointsChangeTracker.EndpointSliceUpdate → Proxier.Sync → BoundedFrequencyRunner.Run → syncProxyRules
+    #        syncProxyRules: svcPortMap.Update / endpointsMap.Update → генерация правил
+    # ждём: явно отмечено, что контроллер и kube-proxy общаются через API/watch; syncProxyRules вызывается через runner, а не напрямую из обработчика.
+    expected:
+      files:
+        - pkg/controller/endpointslice/endpointslice_controller.go
+        - staging/src/k8s.io/endpointslice/reconciler.go
+        - pkg/proxy/config/config.go
+        - pkg/proxy/iptables/proxier.go
+      also_ok:
+        - cmd/kube-proxy/app/server.go                    # ProxyServer.Run: регистрация обработчиков
+        - pkg/proxy/endpointschangetracker.go             # EndpointsChangeTracker, EndpointsMap.Update
+        - pkg/proxy/servicechangetracker.go
+        - pkg/proxy/endpointslicecache.go
+        - pkg/proxy/runner/bounded_frequency_runner.go
+      symbols:
+        - Controller.syncService
+        - Reconciler.Reconcile
+        - Reconciler.reconcileByAddressType
+        - Reconciler.finalize
+        - EndpointSliceConfig.handleAddEndpointSlice
+        - Proxier.OnEndpointSliceAdd
+        - EndpointsChangeTracker.EndpointSliceUpdate
+        - Proxier.syncProxyRules
+
+  - id: t3.3
+    tier: 3
+    prompt: "Проследи путь запроса POST на создание Pod внутри kube-apiserver: от HTTP handler chain через аутентификацию и авторизацию, admission (mutating и validating) до записи в хранилище. Покажи пакеты и ключевые функции по цепочке."
+    # Не пересекается с t2.2: там только Store.Create → etcd, здесь вся верхняя часть.
+    # Порядок в DefaultBuildHandlerChain обратный: фильтры оборачиваются изнутри наружу,
+    # поэтому WithAuthorization в коде стоит раньше WithAuthentication, а выполняются в обратном порядке.
+    # chain: DefaultBuildHandlerChain → WithAuthentication → WithAuthorization → (installer) CreateResource/createHandler
+    #        createHandler → MutationInterface.Admit (chainAdmissionHandler.Admit → mutating webhook Plugin.Admit → mutatingDispatcher.Dispatch)
+    #        createHandler → r.Create(..., AdmissionToValidateObjectFunc) → Store.Create → BeforeCreate → createValidation (validating admission) → Storage.Create
+    # ждём: mutating admission вызывается в createHandler ДО Store.Create; validating — внутри Store.Create через createValidation.
+    expected:
+      files:
+        - staging/src/k8s.io/apiserver/pkg/server/config.go
+        - staging/src/k8s.io/apiserver/pkg/endpoints/filters/authentication.go
+        - staging/src/k8s.io/apiserver/pkg/endpoints/filters/authorization.go
+        - staging/src/k8s.io/apiserver/pkg/endpoints/handlers/create.go
+        - staging/src/k8s.io/apiserver/pkg/registry/generic/registry/store.go
+      also_ok:
+        - staging/src/k8s.io/apiserver/pkg/endpoints/installer.go   # связывает route с CreateResource
+        - staging/src/k8s.io/apiserver/pkg/admission/chain.go
+        - staging/src/k8s.io/apiserver/pkg/admission/plugin/webhook/mutating/plugin.go
+        - staging/src/k8s.io/apiserver/pkg/admission/plugin/webhook/mutating/dispatcher.go
+        - staging/src/k8s.io/apiserver/pkg/admission/plugin/webhook/generic/webhook.go
+        - staging/src/k8s.io/apiserver/pkg/registry/rest/create.go  # BeforeCreate
+      symbols:
+        - DefaultBuildHandlerChain
+        - WithAuthentication
+        - WithAuthorization
+        - createHandler
+        - chainAdmissionHandler.Admit
+        - Plugin.Admit
+        - mutatingDispatcher.Dispatch
+        - Store.Create
+        - BeforeCreate

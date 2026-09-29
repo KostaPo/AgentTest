@@ -1,0 +1,37 @@
+services:
+  claude:
+    build:
+      context: ./.claude-agent
+
+    stdin_open: true
+    tty: true
+
+    entrypoint:
+      - /bin/sh
+      - /agenttest/entrypoint.sh
+
+    volumes:
+      - ./.claude-agent/entrypoint.sh:/agenttest/entrypoint.sh:ro
+      - ./.claude-agent/claude-proxy.mjs:/agenttest/claude-proxy.mjs:ro
+
+    environment:
+      ANTHROPIC_AUTH_TOKEN: ${OPENROUTER_API_KEY}
+      ANTHROPIC_API_KEY: ""
+      ANTHROPIC_MODEL: "deepseek/deepseek-v4-flash-0731"
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "deepseek/deepseek-v4-flash-0731"
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "deepseek/deepseek-v4-flash-0731"
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "deepseek/deepseek-v4-flash-0731"
+      CLAUDE_CODE_SUBAGENT_MODEL: "deepseek/deepseek-v4-flash-0731"
+
+      CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT: "1"
+      CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1"
+
+  pi:
+    build:
+      context: ./.pi-agent
+
+    stdin_open: true
+    tty: true
+
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
